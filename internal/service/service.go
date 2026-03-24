@@ -39,13 +39,7 @@ func (s *AuthService) Register(ctx context.Context, req model.Register) error {
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	user := model.User{
-		Login:        req.Login,
-		Email:        req.Email,
-		PasswordHash: string(hash),
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-	}
+	user := model.NewUser(req.Login, req.Email, string(hash))
 
 	return s.repo.CreateUser(ctx, user)
 }
