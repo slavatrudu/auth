@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/slavatrudu/auth/internal/model"
@@ -27,9 +28,7 @@ func NewRepository(db *gorm.DB, logger *zerolog.Logger) *Repository {
 
 func (r *Repository) CreateUser(ctx context.Context, user model.User) error {
 	userRepo := mapper.UserToRepoUser(user)
-	res := r.db.WithContext(ctx).
-		Clauses(clause.OnConflict{UpdateAll: true}).
-		Create(&userRepo)
+	res := r.db.WithContext(ctx).Create(&userRepo)
 	if res.Error != nil {
 		r.logger.Err(res.Error).Msg("failed to save user")
 		return fmt.Errorf("failed to save user: %w", res.Error)
@@ -68,9 +67,14 @@ func (r *Repository) GetUserByLoginOrEmail(ctx context.Context, loginOrEmail str
 	return mapper.RepoUserToUser(user), nil
 }
 
-func (r *Repository) SaveRefreshToken(ctx context.Context, token model.RefreshToken) error {
+func (r *Repository) UpdateRefreshToken(ctx context.Context, token model.RefreshToken) error {
 	m := mapper.RefreshTokenToRepoRefresh(token)
-	res := r.db.WithContext(ctx).Create(&m)
+	res := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}}, // по какому уникальному индексу конфликт
+			DoUpdates: clause.AssignmentColumns([]string{"token", "expires_at", "revoked_at"}),
+		}).
+		Create(&m)
 	if res.Error != nil {
 		r.logger.Err(res.Error).Msg("failed to save refresh token")
 		return fmt.Errorf("failed to save refresh token: %w", res.Error)
@@ -94,13 +98,48 @@ func (r *Repository) GetRefreshToken(ctx context.Context, token string) (model.R
 }
 
 func (r *Repository) RevokeRefreshToken(ctx context.Context, token string) error {
+	now := time.Now()
 	res := r.db.WithContext(ctx).
 		Model(&repomodel.RefreshToken{}).
 		Where("token = ?", token).
-		Update("revoked_at", gorm.Expr("NOW()"))
+		Update("revoked_at", now)
 	if res.Error != nil {
 		r.logger.Err(res.Error).Msg("failed to revoke refresh token")
 		return fmt.Errorf("failed to revoke refresh token: %w", res.Error)
 	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("refresh token not found")
+	}
 	return nil
+}
+
+func (r *Repository) DeleteUser(ctx context.Context, userID uint64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Удаляем refresh tokens пользователя
+		res := tx.Model(&repomodel.RefreshToken{}).
+			Where("user_id = ?", userID).
+			Delete(&repomodel.RefreshToken{})
+
+		if res.Error != nil {
+			r.logger.Err(res.Error).Msg("failed to delete user refresh tokens")
+			return fmt.Errorf("failed to delete user refresh tokens: %w", res.Error)
+		}
+
+		// Удаляем самого пользователя
+		res = tx.Model(&repomodel.User{}).
+			Where("id = ?", userID).
+			Delete(&repomodel.User{})
+
+		if res.Error != nil {
+			r.logger.Err(res.Error).Msg("failed to delete user")
+			return fmt.Errorf("failed to delete user: %w", res.Error)
+		}
+
+		// Проверяем, что пользователь был найден и удален
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("user not found")
+		}
+
+		return nil
+	})
 }

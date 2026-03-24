@@ -24,9 +24,10 @@ type Repository interface {
 	CreateUser(context.Context, model.User) error
 	GetUserByID(context.Context, uint64) (model.User, error)
 	GetUserByLoginOrEmail(context.Context, string) (model.User, error)
-	SaveRefreshToken(context.Context, model.RefreshToken) error
+	UpdateRefreshToken(context.Context, model.RefreshToken) error
 	GetRefreshToken(context.Context, string) (model.RefreshToken, error)
 	RevokeRefreshToken(context.Context, string) error
+	DeleteUser(context.Context, uint64) error
 }
 
 func New(repo Repository, cfg *config.Config, logger *zerolog.Logger) *AuthService {
@@ -34,6 +35,32 @@ func New(repo Repository, cfg *config.Config, logger *zerolog.Logger) *AuthServi
 }
 
 func (s *AuthService) Register(ctx context.Context, req model.Register) error {
+	// Валидация входных данных
+	if req.Login == "" {
+		return fmt.Errorf("login cannot be empty")
+	}
+	if req.Email == "" {
+		return fmt.Errorf("email cannot be empty")
+	}
+	if req.Password == "" {
+		return fmt.Errorf("password cannot be empty")
+	}
+	if len(req.Password) < 6 {
+		return fmt.Errorf("password must be at least 6 characters long")
+	}
+
+	// Проверяем, не существует ли уже пользователь с таким логином
+	_, err := s.repo.GetUserByLoginOrEmail(ctx, req.Login)
+	if err == nil {
+		return fmt.Errorf("user with login %s already exists", req.Login)
+	}
+
+	// Проверяем, не существует ли уже пользователь с таким email
+	_, err = s.repo.GetUserByLoginOrEmail(ctx, req.Email)
+	if err == nil {
+		return fmt.Errorf("user with email %s already exists", req.Email)
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
@@ -74,7 +101,7 @@ func (s *AuthService) Validate(ctx context.Context, accessToken string) (uint64,
 	if err != nil {
 		return 0, fmt.Errorf("invalid token: %w", err)
 	}
-	uidFloat, ok := claims["sub"].(float64)
+	uidFloat, ok := claims["user_id"].(float64)
 	if !ok {
 		return 0, fmt.Errorf("invalid subject")
 	}
@@ -89,8 +116,8 @@ func (s *AuthService) issueTokens(ctx context.Context, userID uint64) (model.Tok
 	now := time.Now()
 	accessExp := now.Add(time.Duration(s.cfg.AccessTokenTTLMinutes) * time.Minute)
 	claims := jwt.MapClaims{
-		"sub": userID,
-		"exp": accessExp.Unix(),
+		"user_id": userID,
+		"exp":     accessExp.Unix(),
 	}
 	access := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	accessStr, err := access.SignedString([]byte(s.cfg.JwtSecret))
@@ -101,14 +128,13 @@ func (s *AuthService) issueTokens(ctx context.Context, userID uint64) (model.Tok
 	refreshRaw := fmt.Sprintf("%d:%d:%s", userID, now.UnixNano(), s.cfg.JwtSecret)
 	h := sha256.Sum256([]byte(refreshRaw))
 	refreshStr := hex.EncodeToString(h[:])
-	refresh := model.RefreshToken{
-		UserID:    userID,
-		Token:     refreshStr,
-		ExpiresAt: now.Add(time.Duration(s.cfg.RefreshTokenTTLDays) * 24 * time.Hour),
-		CreatedAt: now,
-	}
-	if err := s.repo.SaveRefreshToken(ctx, refresh); err != nil {
+	refresh := model.NewRefreshToken(userID, refreshStr, now.Add(time.Duration(s.cfg.RefreshTokenTTLDays)*24*time.Hour))
+	if err := s.repo.UpdateRefreshToken(ctx, refresh); err != nil {
 		return model.TokenPair{}, err
 	}
 	return model.TokenPair{AccessToken: accessStr, RefreshToken: refreshStr}, nil
+}
+
+func (s *AuthService) DeleteUser(ctx context.Context, userID uint64) error {
+	return s.repo.DeleteUser(ctx, userID)
 }

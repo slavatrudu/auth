@@ -23,6 +23,7 @@ type AuthService interface {
 	Refresh(context.Context, string) (model.TokenPair, error)
 	Validate(context.Context, string) (uint64, error)
 	Logout(context.Context, string) error
+	DeleteUser(context.Context, uint64) error
 }
 
 func New(authService AuthService, logger *zerolog.Logger) *Server {
@@ -63,6 +64,13 @@ func (s *Server) Validate(ctx context.Context, req *authpb.ValidateRequest) (*au
 
 func (s *Server) Logout(ctx context.Context, req *authpb.LogoutRequest) (*emptypb.Empty, error) {
 	if err := s.authService.Logout(ctx, req.RefreshToken); err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) DeleteUser(ctx context.Context, req *authpb.DeleteRequest) (*emptypb.Empty, error) {
+	if err := s.authService.DeleteUser(ctx, req.GetId()); err != nil {
 		return nil, err
 	}
 	return &emptypb.Empty{}, nil
