@@ -11,7 +11,7 @@ require (
 	github.com/lib/pq v1.12.0
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/rs/zerolog v1.34.0
-	github.com/slavatrudu/contracts v1.5.1
+	github.com/slavatrudu/contracts v1.6.0
 	golang.org/x/crypto v0.48.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
